@@ -2,6 +2,222 @@ const express = require("express");
 const router = express.Router();
 const { database } = require("../config");
 
+// Helper function to clean and sanitize fields
+const sanitizeField = (field) => {
+  return field.replace(/[^a-zA-Z0-9 ]/g, "");
+};
+
+// Helper function to calculate paid percentage
+const calculatePaidPercentage = (totalPaid, totalCredit, totalBill) => {
+  // console.log("paid", totalPaid);
+  // console.log("credit", totalCredit);
+  // console.log("bill", totalBill);
+
+  const numericTotalPaid = parseFloat(totalPaid);
+  const numericTotalCredit = parseFloat(totalCredit);
+  const numericTotalBill = parseFloat(totalBill);
+
+  if (
+    isNaN(numericTotalPaid) ||
+    isNaN(numericTotalCredit) ||
+    isNaN(numericTotalBill)
+  ) {
+    return 0;
+  }
+
+  return isNaN(
+    ((numericTotalPaid + numericTotalCredit) / numericTotalBill) * 100
+  )
+    ? 0
+    : ((numericTotalPaid + numericTotalCredit) / numericTotalBill) * 100;
+};
+
+router.post("/importExceltodb", async (req, res) => {
+  try {
+    await database.transaction(async (trx) => {
+      const insertPromises = [];
+      const insertBiodataPromises = [];
+
+      for (const field of req.body) {
+        const sanitizedField = Object.keys(field).reduce((acc, key) => {
+          acc[key] = sanitizeField(field[key]);
+          return acc;
+        }, {});
+
+        // Clean and sanitize fields for student_paid_fess table
+        const cleanedField = {
+          stu_no: sanitizedField.stdno,
+          acc_yr: sanitizedField.accyr,
+          study_yr: sanitizedField.study_yr,
+          sem: sanitizedField.sem,
+          reg_status: sanitizedField.reg_status,
+          total_bill: sanitizedField.total_bill
+            .replace(/\s/g, "")
+            .replace(/[^a-zA-Z0-9. ]/g, ""),
+          total_credit: sanitizedField.total_credit
+            .replace(/\s/g, "")
+            .replace(/[^a-zA-Z0-9. ]/g, ""),
+          tatal_paid: sanitizedField.total_paid
+            .replace(/\s/g, "")
+            .replace(/[^a-zA-Z0-9. ]/g, ""),
+          paid_percentage: calculatePaidPercentage(
+            sanitizedField.total_paid,
+            sanitizedField.total_credit,
+            sanitizedField.total_bill
+          ),
+          total_due: sanitizedField.total_due
+            .replace(/\s/g, "")
+            .replace(/[^\d]+/g, ""),
+        };
+
+        const stuData = await database
+          .select("*")
+          .where({
+            stu_no: cleanedField.stu_no,
+            study_yr: cleanedField.study_yr,
+            sem: cleanedField.sem,
+          })
+          .from("student_paid_fess")
+          .transacting(trx);
+
+        if (stuData.length === 0) {
+          insertPromises.push(
+            database("student_paid_fess")
+              .insert(cleanedField)
+              .transacting(trx)
+              .then(() => {
+                // Handle success
+              })
+              .catch((err) => {
+                console.error("Failed to save the data", err);
+              })
+          );
+        } else {
+          insertPromises.push(
+            database("student_paid_fess")
+              .where({
+                stu_no: cleanedField.stu_no,
+                study_yr: cleanedField.study_yr,
+                sem: cleanedField.sem,
+              })
+              .update(cleanedField)
+              .transacting(trx)
+              .then(() => {
+                // Handle success
+              })
+              .catch((err) => {
+                console.error("Error in updating the data", err);
+              })
+          );
+        }
+
+        // Clean and sanitize fields for students_biodata table
+        const sanitizedBiodata = {
+          stdno: sanitizedField.stdno,
+          regno: sanitizedField.regno,
+          name: sanitizedField.name,
+          admissions_form_no: "",
+          sex: sanitizedField.sex,
+          telno: sanitizedField.telno,
+          entry_ac_yr: sanitizedField.entry_ac_yr,
+          entry_study_yr: sanitizedField.study_yr,
+          nationality: sanitizedField.nationality,
+          facultycode: sanitizedField.facultycode,
+          progtitle: sanitizedField.progtitle,
+          progcode: sanitizedField.progcode,
+          prog_alias: sanitizedField.prog_alias,
+          programlevel: sanitizedField.programlevel,
+          progduration: "",
+          facultytitle: sanitizedField.facultytitle,
+          intake: sanitizedField.intake,
+          campus: sanitizedField.campus,
+          sponsorship: sanitizedField.sponsorship,
+          residence_status: sanitizedField.residence_status,
+          current_sem: sanitizedField.sem,
+          study_time: sanitizedField.study_time,
+          collegetitle: sanitizedField.collegetitle,
+          std_status: 0,
+          progversion: "",
+        };
+
+        const stuBiodataData = await database
+          .select("*")
+          .from("students_biodata")
+          .where("students_biodata.stdno", "=", sanitizedBiodata.stdno)
+          .transacting(trx);
+
+        if (stuBiodataData.length === 0) {
+          insertBiodataPromises.push(
+            database("students_biodata")
+              .insert(sanitizedBiodata)
+              .transacting(trx)
+              .then(() => {
+                // Handle success
+              })
+          );
+        }
+      }
+
+      // Execute all insert/update promises
+      await Promise.all([...insertBiodataPromises, ...insertPromises]);
+
+      // Commit the transaction
+      await trx.commit();
+
+      // Insert into uploaded_excel_forms_fees table
+      await database("uploaded_excel_forms_fees").insert({
+        file_name: "new file",
+        upload_date: new Date(),
+      });
+
+      // Fetch requiredPercentage and student counts
+      const requiredPercentage = await database
+        .select("*")
+        .from("constraints")
+        .where("c_name", "=", "Voting")
+        .first();
+
+      const [elligibleVotersCount] = await database("student_paid_fess")
+        .join(
+          "students_biodata",
+          "student_paid_fess.stu_no",
+          "students_biodata.stdno"
+        )
+        .where("student_paid_fess.acc_yr", "=", requiredPercentage.acc_yr)
+        .andWhere("students_biodata.campus", "=", "main")
+        .andWhere(
+          "student_paid_fess.paid_percentage",
+          ">=",
+          requiredPercentage.c_percentage
+        )
+        .count();
+
+      const [exemptedStudentsCount] = await database("vote_exemptions")
+        .join(
+          "students_biodata",
+          "vote_exemptions.stu_no",
+          "students_biodata.stdno"
+        )
+        .count();
+
+      res.send({
+        success: true,
+        message: "Excel sheet uploaded successfully",
+        result: {
+          elligibleVoters: elligibleVotersCount["count(*)"],
+          exemptedStudents: exemptedStudentsCount["count(*)"],
+        },
+      });
+    });
+  } catch (error) {
+    console.error("Error in file provided", error);
+    res.status(500).send({
+      success: false,
+      message: "Error in file provided",
+    });
+  }
+});
+
 //upload
 router.post("/uploadImage", (req, res) => {
   try {
@@ -101,286 +317,286 @@ router.post("/upload-photos", async (req, res) => {
   }
 });
 
-router.post("/importExceltodb", (req, res) => {
-  // console.log("res body", req.body);
-  try {
-    const fieldsToInsertBiodata = req.body
-      .map((field, index) => {
-        // const noSpecialChars = str.replace(/[^a-zA-Z0-9 ]/g, "");
-        if (index == 0) return;
-        return {
-          stdno: field.stdno.replace(/[^a-zA-Z0-9 ]/g, ""),
-          regno: field.regno.replace(/[^a-zA-Z0-9/ ]/g, ""),
-          name: field.name.replace(/[^a-zA-Z0-9 ]/g, ""),
-          admissions_form_no: "",
-          sex: field.sex.replace(/[^a-zA-Z0-9 ]/g, ""),
-          telno: field.telno.replace(/[^a-zA-Z0-9 ]/g, ""),
-          entry_ac_yr: field.entry_ac_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          entry_study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          nationality: field.nationality.replace(/[^a-zA-Z0-9 ]/g, ""),
-          facultycode: field.facultycode.replace(/[^a-zA-Z0-9 ]/g, ""),
-          progtitle: field.progtitle.replace(/[^a-zA-Z0-9 ]/g, ""),
-          progcode: field.progcode.replace(/[^a-zA-Z0-9 ]/g, ""),
-          prog_alias: field.prog_alias.replace(/[^a-zA-Z0-9 ]/g, ""),
+// router.post("/importExceltodb", (req, res) => {
+//   // console.log("res body", req.body);
+//   try {
+//     const fieldsToInsertBiodata = req.body
+//       .map((field, index) => {
+//         // const noSpecialChars = str.replace(/[^a-zA-Z0-9 ]/g, "");
+//         if (index == 0) return;
+//         return {
+//           stdno: field.stdno.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           regno: field.regno.replace(/[^a-zA-Z0-9/ ]/g, ""),
+//           name: field.name.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           admissions_form_no: "",
+//           sex: field.sex.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           telno: field.telno.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           entry_ac_yr: field.entry_ac_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           entry_study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           nationality: field.nationality.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           facultycode: field.facultycode.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           progtitle: field.progtitle.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           progcode: field.progcode.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           prog_alias: field.prog_alias.replace(/[^a-zA-Z0-9 ]/g, ""),
 
-          programlevel: field.programlevel.replace(/[^a-zA-Z0-9 ]/g, ""),
-          progduration: "",
-          facultytitle: field.facultytitle.replace(/[^a-zA-Z0-9 ]/g, ""),
-          intake: field.intake.replace(/[^a-zA-Z0-9 ]/g, ""),
-          campus: field.campus.replace(/[^a-zA-Z0-9 ]/g, ""),
-          sponsorship: field.sponsorship.replace(/[^a-zA-Z0-9 ]/g, ""),
-          residence_status: field.residence_status.replace(
-            /[^a-zA-Z0-9 ]/g,
-            ""
-          ),
-          current_sem: field.sem.replace(/[^a-zA-Z0-9 ]/g, ""),
-          study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          study_time: field.study_time.replace(/[^a-zA-Z0-9 ]/g, ""),
-          collegetitle: field.collegetitle.replace(/[^a-zA-Z0-9 ]/g, ""),
-          std_status: 0,
-          progversion: "",
-        };
-      })
-      .filter((row) => {
-        return row !== undefined;
-      });
+//           programlevel: field.programlevel.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           progduration: "",
+//           facultytitle: field.facultytitle.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           intake: field.intake.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           campus: field.campus.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           sponsorship: field.sponsorship.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           residence_status: field.residence_status.replace(
+//             /[^a-zA-Z0-9 ]/g,
+//             ""
+//           ),
+//           current_sem: field.sem.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           study_time: field.study_time.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           collegetitle: field.collegetitle.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           std_status: 0,
+//           progversion: "",
+//         };
+//       })
+//       .filter((row) => {
+//         return row !== undefined;
+//       });
 
-    const fieldsToInsert = req.body
-      .map((field, index) => {
-        const noWhiteSpace = field.total_bill.replace(/\s/g, "");
-        var cleanTotalBill = noWhiteSpace.replace(/[^a-zA-Z0-9. ]/g, "");
+//     const fieldsToInsert = req.body
+//       .map((field, index) => {
+//         const noWhiteSpace = field.total_bill.replace(/\s/g, "");
+//         var cleanTotalBill = noWhiteSpace.replace(/[^a-zA-Z0-9. ]/g, "");
 
-        const noWhiteSpace2 = field.total_paid.replace(/\s/g, "");
-        var cleanTotalPaid = noWhiteSpace2.replace(/[^a-zA-Z0-9. ]/g, "");
+//         const noWhiteSpace2 = field.total_paid.replace(/\s/g, "");
+//         var cleanTotalPaid = noWhiteSpace2.replace(/[^a-zA-Z0-9. ]/g, "");
 
-        const noWhiteSpace3 = field.total_credit.replace(/\s/g, "");
-        var cleanTotalCredit = noWhiteSpace3.replace(/[^a-zA-Z0-9. ]/g, "");
+//         const noWhiteSpace3 = field.total_credit.replace(/\s/g, "");
+//         var cleanTotalCredit = noWhiteSpace3.replace(/[^a-zA-Z0-9. ]/g, "");
 
-        const noWhiteSpace4 = field.total_due.replace(/\s/g, "");
-        var cleanTotalDue = noWhiteSpace4.replace(/[^\d]+/g, "");
+//         const noWhiteSpace4 = field.total_due.replace(/\s/g, "");
+//         var cleanTotalDue = noWhiteSpace4.replace(/[^\d]+/g, "");
 
-        // const noSpecialChars = str.replace(/[^a-zA-Z0-9 ]/g, "");
-        // if (index == 0) return;
+//         // const noSpecialChars = str.replace(/[^a-zA-Z0-9 ]/g, "");
+//         // if (index == 0) return;
 
-        // res.send(field);
-        return {
-          stu_no: field.stdno.replace(/[^a-zA-Z0-9 ]/g, ""),
-          acc_yr: field.accyr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          sem: field.sem.replace(/[^a-zA-Z0-9 ]/g, ""),
-          reg_status: field.reg_status.replace(/[^a-zA-Z0-9 ]/g, ""),
-          total_bill: cleanTotalBill,
-          total_credit: cleanTotalCredit,
-          tatal_paid: cleanTotalPaid,
-          paid_percentage: isNaN(
-            parseInt(
-              ((parseInt(cleanTotalPaid) + parseInt(cleanTotalCredit)) /
-                parseInt(cleanTotalBill)) *
-                100
-            )
-          )
-            ? 0
-            : parseInt(
-                ((parseInt(cleanTotalPaid) + parseInt(cleanTotalCredit)) /
-                  parseInt(cleanTotalBill)) *
-                  100
-              ),
-          total_due: cleanTotalDue,
-        };
-      })
-      .filter((row) => {
-        return row !== undefined;
-      });
+//         // res.send(field);
+//         return {
+//           stu_no: field.stdno.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           acc_yr: field.accyr.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           sem: field.sem.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           reg_status: field.reg_status.replace(/[^a-zA-Z0-9 ]/g, ""),
+//           total_bill: cleanTotalBill,
+//           total_credit: cleanTotalCredit,
+//           tatal_paid: cleanTotalPaid,
+//           paid_percentage: isNaN(
+//             parseInt(
+//               ((parseInt(cleanTotalPaid) + parseInt(cleanTotalCredit)) /
+//                 parseInt(cleanTotalBill)) *
+//                 100
+//             )
+//           )
+//             ? 0
+//             : parseInt(
+//                 ((parseInt(cleanTotalPaid) + parseInt(cleanTotalCredit)) /
+//                   parseInt(cleanTotalBill)) *
+//                   100
+//               ),
+//           total_due: cleanTotalDue,
+//         };
+//       })
+//       .filter((row) => {
+//         return row !== undefined;
+//       });
 
-    database.transaction((trx) => {
-      const inserts = fieldsToInsert.map((stu) => {
-        // database("student_paid_fess")
-        //   .where("stu_no", stu.stu_no)
-        //   .andWhere("study_yr", stu.study_yr)
-        //   .andWhere("sem", stu.sem)
-        return database
-          .select("*")
-          .where({
-            stu_no: stu.stu_no,
-            study_yr: stu.study_yr,
-            sem: stu.sem,
-          })
-          .from("student_paid_fess")
-          .transacting(trx)
-          .then((result) => {
-            //the stu number is not there
-            if (result.length == 0) {
-              return database("student_paid_fess")
-                .insert(stu)
-                .transacting(trx)
-                .then((data) => {
-                  // res.status(200).send("Success");
-                  // console.log("Data", data);
-                })
-                .catch((err) => {
-                  console.log("Failed to save the data", err);
-                  // res.status(400).send("fail");
-                });
-            } else {
-              //the stu no id there
-              return database("student_paid_fess")
-                .where(function () {
-                  this.where("stu_no", "=", stu.stu_no);
-                })
+//     database.transaction((trx) => {
+//       const inserts = fieldsToInsert.map((stu) => {
+//         // database("student_paid_fess")
+//         //   .where("stu_no", stu.stu_no)
+//         //   .andWhere("study_yr", stu.study_yr)
+//         //   .andWhere("sem", stu.sem)
+//         return database
+//           .select("*")
+//           .where({
+//             stu_no: stu.stu_no,
+//             study_yr: stu.study_yr,
+//             sem: stu.sem,
+//           })
+//           .from("student_paid_fess")
+//           .transacting(trx)
+//           .then((result) => {
+//             //the stu number is not there
+//             if (result.length == 0) {
+//               return database("student_paid_fess")
+//                 .insert(stu)
+//                 .transacting(trx)
+//                 .then((data) => {
+//                   // res.status(200).send("Success");
+//                   // console.log("Data", data);
+//                 })
+//                 .catch((err) => {
+//                   console.log("Failed to save the data", err);
+//                   // res.status(400).send("fail");
+//                 });
+//             } else {
+//               //the stu no id there
+//               return database("student_paid_fess")
+//                 .where(function () {
+//                   this.where("stu_no", "=", stu.stu_no);
+//                 })
 
-                .andWhere(function () {
-                  this.where("study_yr", "=", stu.study_yr);
-                })
-                .andWhere(function () {
-                  this.where("sem", "=", stu.sem);
-                })
-                .update({
-                  acc_yr: stu.acc_yr,
-                  paid_percentage: stu.paid_percentage,
-                  reg_status: stu.reg_status,
-                  total_bill: stu.total_bill,
-                  total_credit: stu.total_credit,
-                  tatal_paid: stu.tatal_paid,
-                  total_due: stu.total_due,
-                })
-                .transacting(trx)
-                .then((data) => {
-                  // res.send("updated the data");
-                  // console.log("Data here", data);
-                })
-                .catch((err) => console.log("Error in updating the data", err));
-            }
-          });
-      });
+//                 .andWhere(function () {
+//                   this.where("study_yr", "=", stu.study_yr);
+//                 })
+//                 .andWhere(function () {
+//                   this.where("sem", "=", stu.sem);
+//                 })
+//                 .update({
+//                   acc_yr: stu.acc_yr,
+//                   paid_percentage: stu.paid_percentage,
+//                   reg_status: stu.reg_status,
+//                   total_bill: stu.total_bill,
+//                   total_credit: stu.total_credit,
+//                   tatal_paid: stu.tatal_paid,
+//                   total_due: stu.total_due,
+//                 })
+//                 .transacting(trx)
+//                 .then((data) => {
+//                   // res.send("updated the data");
+//                   // console.log("Data here", data);
+//                 })
+//                 .catch((err) => console.log("Error in updating the data", err));
+//             }
+//           });
+//       });
 
-      const insert2 = fieldsToInsertBiodata.map((student) => {
-        return database
-          .select("*")
-          .from("students_biodata")
-          .where("students_biodata.stdno", "=", student.stdno)
-          .transacting(trx)
-          .then((stuData) => {
-            if (stuData.length == 0) {
-              return database("students_biodata")
-                .insert({
-                  stdno: student.stdno,
-                  regno: student.regno,
-                  name: student.name,
-                  admissions_form_no: student.admissions_form_no,
-                  sex: student.sex,
-                  telno: student.telno,
-                  entry_ac_yr: student.entry_ac_yr,
-                  entry_study_yr: student.entry_study_yr,
-                  nationality: student.nationality,
-                  facultycode: student.facultycode,
-                  progtitle: student.progtitle,
-                  progcode: student.progcode,
-                  prog_alias: student.prog_alias,
-                  programlevel: student.programlevel,
-                  progduration: student.progduration,
-                  facultytitle: student.facultytitle,
-                  intake: student.intake,
-                  campus: student.campus,
-                  sponsorship: student.sponsorship,
-                  residence_status: student.residence_status,
-                  current_sem: student.current_sem,
-                  study_yr: student.study_yr,
-                  study_time: student.study_time,
-                  collegetitle: student.collegetitle,
-                  std_status: student.std_status,
-                  progversion: student.progversion,
-                })
-                .transacting(trx)
-                .then((result) => {
-                  console.log("Added a new student to our db ", student.stdno);
-                });
-            }
-          });
-      });
+//       const insert2 = fieldsToInsertBiodata.map((student) => {
+//         return database
+//           .select("*")
+//           .from("students_biodata")
+//           .where("students_biodata.stdno", "=", student.stdno)
+//           .transacting(trx)
+//           .then((stuData) => {
+//             if (stuData.length == 0) {
+//               return database("students_biodata")
+//                 .insert({
+//                   stdno: student.stdno,
+//                   regno: student.regno,
+//                   name: student.name,
+//                   admissions_form_no: student.admissions_form_no,
+//                   sex: student.sex,
+//                   telno: student.telno,
+//                   entry_ac_yr: student.entry_ac_yr,
+//                   entry_study_yr: student.entry_study_yr,
+//                   nationality: student.nationality,
+//                   facultycode: student.facultycode,
+//                   progtitle: student.progtitle,
+//                   progcode: student.progcode,
+//                   prog_alias: student.prog_alias,
+//                   programlevel: student.programlevel,
+//                   progduration: student.progduration,
+//                   facultytitle: student.facultytitle,
+//                   intake: student.intake,
+//                   campus: student.campus,
+//                   sponsorship: student.sponsorship,
+//                   residence_status: student.residence_status,
+//                   current_sem: student.current_sem,
+//                   study_yr: student.study_yr,
+//                   study_time: student.study_time,
+//                   collegetitle: student.collegetitle,
+//                   std_status: student.std_status,
+//                   progversion: student.progversion,
+//                 })
+//                 .transacting(trx)
+//                 .then((result) => {
+//                   console.log("Added a new student to our db ", student.stdno);
+//                 });
+//             }
+//           });
+//       });
 
-      // Wait for all the inserts to complete
-      Promise.all([...insert2, ...inserts])
-        .then(() => {
-          // Send the response when the inserts are done
-          trx
-            .commit()
-            .then(() => {
-              database("uploaded_excel_forms_fees")
-                .insert({
-                  file_name: "new file",
-                  upload_date: new Date(),
-                })
-                .then(async (result) => {
-                  const requiredPercentage = await database
-                    .select("*")
-                    .from("constraints")
-                    .where("c_name", "=", "Voting")
-                    .first();
+//       // Wait for all the inserts to complete
+//       Promise.all([...insert2, ...inserts])
+//         .then(() => {
+//           // Send the response when the inserts are done
+//           trx
+//             .commit()
+//             .then(() => {
+//               database("uploaded_excel_forms_fees")
+//                 .insert({
+//                   file_name: "new file",
+//                   upload_date: new Date(),
+//                 })
+//                 .then(async (result) => {
+//                   const requiredPercentage = await database
+//                     .select("*")
+//                     .from("constraints")
+//                     .where("c_name", "=", "Voting")
+//                     .first();
 
-                  // return all students that are exempted
-                  const exemptedStudents = await database("vote_exemptions")
-                    .join(
-                      "students_biodata",
-                      "vote_exemptions.stu_no",
-                      "students_biodata.stdno"
-                    )
-                    .select("vote_exemptions.*", "students_biodata.name")
-                    .count();
+//                   // return all students that are exempted
+//                   const exemptedStudents = await database("vote_exemptions")
+//                     .join(
+//                       "students_biodata",
+//                       "vote_exemptions.stu_no",
+//                       "students_biodata.stdno"
+//                     )
+//                     .select("vote_exemptions.*", "students_biodata.name")
+//                     .count();
 
-                  //lets get the elible voters
-                  const elligibleVoters = await database("student_paid_fess")
-                    .join(
-                      "students_biodata",
-                      "student_paid_fess.stu_no",
-                      "students_biodata.stdno"
-                    )
-                    .where(
-                      "student_paid_fess.acc_yr",
-                      "=",
-                      requiredPercentage.acc_yr
-                    )
-                    .andWhere("students_biodata.campus", "=", "main")
-                    .andWhere(
-                      "student_paid_fess.paid_percentage",
-                      ">=",
-                      requiredPercentage.c_percentage
-                    )
-                    .count();
+//                   //lets get the elible voters
+//                   const elligibleVoters = await database("student_paid_fess")
+//                     .join(
+//                       "students_biodata",
+//                       "student_paid_fess.stu_no",
+//                       "students_biodata.stdno"
+//                     )
+//                     .where(
+//                       "student_paid_fess.acc_yr",
+//                       "=",
+//                       requiredPercentage.acc_yr
+//                     )
+//                     .andWhere("students_biodata.campus", "=", "main")
+//                     .andWhere(
+//                       "student_paid_fess.paid_percentage",
+//                       ">=",
+//                       requiredPercentage.c_percentage
+//                     )
+//                     .count();
 
-                  res.send({
-                    success: true,
-                    message: "Excel sheet uploaded successfully",
-                    result: {
-                      elligibleVoters: elligibleVoters[0]["count(*)"],
-                      exemptedStudents: exemptedStudents[0]["count(*)"],
-                    },
-                  });
-                });
-            })
-            .catch((err) => {
-              console.error(err);
-              // res.send(`Error ${err}`);
-              res.send({
-                success: false,
-                message: `Theres a problem with the sent file ${err}`,
-              });
-            });
-        })
-        .catch((err) => {
-          console.error(err);
-          res.send({
-            success: false,
-            message: "Theres a problem with the sent file",
-          });
-        });
-    });
-  } catch (error) {
-    res.send({
-      success: false,
-      message: "Error in file provided",
-    });
-  }
-});
+//                   res.send({
+//                     success: true,
+//                     message: "Excel sheet uploaded successfully",
+//                     result: {
+//                       elligibleVoters: elligibleVoters[0]["count(*)"],
+//                       exemptedStudents: exemptedStudents[0]["count(*)"],
+//                     },
+//                   });
+//                 });
+//             })
+//             .catch((err) => {
+//               console.error(err);
+//               // res.send(`Error ${err}`);
+//               res.send({
+//                 success: false,
+//                 message: `Theres a problem with the sent file ${err}`,
+//               });
+//             });
+//         })
+//         .catch((err) => {
+//           console.error(err);
+//           res.send({
+//             success: false,
+//             message: "Theres a problem with the sent file",
+//           });
+//         });
+//     });
+//   } catch (error) {
+//     res.send({
+//       success: false,
+//       message: "Error in file provided",
+//     });
+//   }
+// });
 
 router.post("/votersUpload", (req, res) => {
   try {
