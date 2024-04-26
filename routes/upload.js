@@ -2,6 +2,14 @@ const express = require("express");
 const router = express.Router();
 const { database } = require("../config");
 
+const cleanTextField = (field) => {
+  return field.replace(/[^a-zA-Z0-9 ]/g, "");
+};
+
+const cleanNumField = (field) => {
+  return field.replace(/[^a-zA-Z0-9. ]/g, "");
+};
+
 //upload
 router.post("/uploadImage", (req, res) => {
   try {
@@ -104,39 +112,39 @@ router.post("/upload-photos", async (req, res) => {
 router.post("/importExceltodb", (req, res) => {
   // console.log("res body", req.body);
   try {
-    const fieldsToInsertBiodata = req.body
+    const fieldsToInsertBiodata = req.body.students
       .map((field, index) => {
         // const noSpecialChars = str.replace(/[^a-zA-Z0-9 ]/g, "");
         if (index == 0) return;
         return {
-          stdno: field.stdno.replace(/[^a-zA-Z0-9 ]/g, ""),
-          regno: field.regno.replace(/[^a-zA-Z0-9/ ]/g, ""),
-          name: field.name.replace(/[^a-zA-Z0-9 ]/g, ""),
+          stdno: cleanTextField(field.stdno),
+          regno: cleanTextField(field.regno),
+          name: cleanTextField(field.name),
           admissions_form_no: "",
-          sex: field.sex.replace(/[^a-zA-Z0-9 ]/g, ""),
-          telno: field.telno.replace(/[^a-zA-Z0-9 ]/g, ""),
-          entry_ac_yr: field.entry_ac_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          entry_study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          nationality: field.nationality.replace(/[^a-zA-Z0-9 ]/g, ""),
-          facultycode: field.facultycode.replace(/[^a-zA-Z0-9 ]/g, ""),
-          progtitle: field.progtitle.replace(/[^a-zA-Z0-9 ]/g, ""),
-          progcode: field.progcode.replace(/[^a-zA-Z0-9 ]/g, ""),
-          prog_alias: field.prog_alias.replace(/[^a-zA-Z0-9 ]/g, ""),
+          sex: cleanTextField(field.sex),
+          telno: cleanTextField(field.telno),
+          entry_ac_yr: cleanTextField(field.entry_ac_yr),
+          entry_study_yr: cleanTextField(field.study_yr),
+          nationality: cleanTextField(field.nationality),
+          facultycode: cleanTextField(field.facultycode),
+          progtitle: cleanTextField(field.progtitle),
+          progcode: cleanTextField(field.progcode),
+          prog_alias: cleanTextField(field.prog_alias),
 
-          programlevel: field.programlevel.replace(/[^a-zA-Z0-9 ]/g, ""),
+          programlevel: cleanTextField(field.programlevel),
           progduration: "",
-          facultytitle: field.facultytitle.replace(/[^a-zA-Z0-9 ]/g, ""),
-          intake: field.intake.replace(/[^a-zA-Z0-9 ]/g, ""),
-          campus: field.campus.replace(/[^a-zA-Z0-9 ]/g, ""),
-          sponsorship: field.sponsorship.replace(/[^a-zA-Z0-9 ]/g, ""),
+          facultytitle: cleanTextField(field.facultytitle),
+          intake: cleanTextField(field.intake),
+          campus: cleanTextField(field.campus),
+          sponsorship: cleanTextField(field.sponsorship),
           residence_status: field.residence_status.replace(
             /[^a-zA-Z0-9 ]/g,
             ""
           ),
-          current_sem: field.sem.replace(/[^a-zA-Z0-9 ]/g, ""),
-          study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          study_time: field.study_time.replace(/[^a-zA-Z0-9 ]/g, ""),
-          collegetitle: field.collegetitle.replace(/[^a-zA-Z0-9 ]/g, ""),
+          current_sem: cleanTextField(field.sem),
+          study_yr: cleanTextField(field.study_yr),
+          study_time: cleanTextField(field.study_time),
+          collegetitle: cleanTextField(field.collegetitle),
           std_status: 0,
           progversion: "",
         };
@@ -145,30 +153,30 @@ router.post("/importExceltodb", (req, res) => {
         return row !== undefined;
       });
 
-    const fieldsToInsert = req.body
+    const fieldsToInsert = req.body.students
       .map((field, index) => {
         const noWhiteSpace = field.total_bill.replace(/\s/g, "");
-        var cleanTotalBill = noWhiteSpace.replace(/[^a-zA-Z0-9. ]/g, "");
+        var cleanTotalBill = cleanNumField(noWhiteSpace);
 
         const noWhiteSpace2 = field.total_paid.replace(/\s/g, "");
-        var cleanTotalPaid = noWhiteSpace2.replace(/[^a-zA-Z0-9. ]/g, "");
+        var cleanTotalPaid = cleanNumField(noWhiteSpace2);
 
         const noWhiteSpace3 = field.total_credit.replace(/\s/g, "");
-        var cleanTotalCredit = noWhiteSpace3.replace(/[^a-zA-Z0-9. ]/g, "");
+        var cleanTotalCredit = cleanNumField(noWhiteSpace3);
 
         const noWhiteSpace4 = field.total_due.replace(/\s/g, "");
         var cleanTotalDue = noWhiteSpace4.replace(/[^\d]+/g, "");
 
-        // const noSpecialChars = str.replace(/[^a-zA-Z0-9 ]/g, "");
+        // const noSpecialChars = str;
         // if (index == 0) return;
 
         // res.send(field);
         return {
-          stu_no: field.stdno.replace(/[^a-zA-Z0-9 ]/g, ""),
-          acc_yr: field.accyr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          study_yr: field.study_yr.replace(/[^a-zA-Z0-9 ]/g, ""),
-          sem: field.sem.replace(/[^a-zA-Z0-9 ]/g, ""),
-          reg_status: field.reg_status.replace(/[^a-zA-Z0-9 ]/g, ""),
+          stu_no: cleanTextField(field.stdno),
+          acc_yr: cleanTextField(field.accyr),
+          study_yr: cleanTextField(field.study_yr),
+          sem: cleanTextField(field.sem),
+          reg_status: cleanTextField(field.reg_status),
           total_bill: cleanTotalBill,
           total_credit: cleanTotalCredit,
           tatal_paid: cleanTotalPaid,
@@ -186,6 +194,8 @@ router.post("/importExceltodb", (req, res) => {
                   100
               ),
           total_due: cleanTotalDue,
+          acc_yr_id: req.body.acc_yr_id,
+          sem_half: req.body.sem,
         };
       })
       .filter((row) => {
@@ -194,10 +204,6 @@ router.post("/importExceltodb", (req, res) => {
 
     database.transaction((trx) => {
       const inserts = fieldsToInsert.map((stu) => {
-        // database("student_paid_fess")
-        //   .where("stu_no", stu.stu_no)
-        //   .andWhere("study_yr", stu.study_yr)
-        //   .andWhere("sem", stu.sem)
         return database
           .select("*")
           .where({
@@ -242,6 +248,8 @@ router.post("/importExceltodb", (req, res) => {
                   total_credit: stu.total_credit,
                   tatal_paid: stu.tatal_paid,
                   total_due: stu.total_due,
+                  acc_yr_id: req.body.acc_yr_id,
+                  sem_half: req.body.sem,
                 })
                 .transacting(trx)
                 .then((data) => {
@@ -375,6 +383,7 @@ router.post("/importExceltodb", (req, res) => {
         });
     });
   } catch (error) {
+    console.log("error", error);
     res.send({
       success: false,
       message: "Error in file provided",
